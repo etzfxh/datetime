@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+
+'''
+Testing:
+
+# Positional mode
+datetime $(date +'%s.%N')
+datetime -z "America/New York" $(date +'%s.%N')
+datetime -p minutes $(date +'%s.%N')
+datetime -p minutes -z "America/New York" $(date +'%s.%N')
+
+# Stream mode
+while : ; do date +'%s.%N'; sleep 0.5; done | datetime -s
+while : ; do date +'%s.%N'; sleep 0.5; done | datetime -s -z "America/New York"
+while : ; do date +'%s.%N'; sleep 0.5; done | datetime -s -p minutes
+while : ; do date +'%s.%N'; sleep 0.5; done | datetime -s -p minutes -z "America/New York"
+
+# Should print the usage string, because there are no arguments
+datetime
+
+# Should print usage string, because foo is not a valid precision
+datetime -p foo $(date +'%s.%N')
+
+# Should print usage string, because epoch argument and stream flag are given.
+datetime $(date +'%s.%N') -s
+'''
+
+import argparse
+import datetime
+import sys
+
+import dateutil.tz
+
+DESCRIPTION = '''\
+In positional mode (without the -s (--stream) flag), read a single UNIX epoch as
+a positional argument and print the corresponding datetime string to stdout.
+
+In stream mode, (with -s (--stream) flag and without positional epoch argument),
+read UNIX epochs from stdin and print the corresponding datetime strings to
+stdout. This mode has about 200x better performance than positional mode.
+
+In either mode, the output is in ISO 8601 format, with a single space as
+separator between the date part and the time part. Optionally, the user may
+choose the precision of the output (default: microseconds), and the timezone
+(default: Europe/Berlin).'''
+
+TIMEZONE = 'Europe/Berlin'
+
+PRECISIONS = ['hours', 'minutes', 'seconds', 'milliseconds', 'microseconds']
+
+def _datetime(epoch, timezone, precision):
+    naive_utc = datetime.datetime.utcfromtimestamp(epoch)
+    utc = naive_utc.replace(tzinfo=dateutil.tz.tzutc())
+    local = utc.astimezone(dateutil.tz.gettz(timezone))
+    print(local.isoformat(sep=' ', timespec=precision))
+
+def _datetime_stream(timezone, precision):
+    tz_utc = dateutil.tz.tzutc()
+    tz_local = dateutil.tz.gettz(timezone)
+    for epoch in sys.stdin:
+        naive_utc = datetime.datetime.utcfromtimestamp(float(epoch))
+        utc = naive_utc.replace(tzinfo=tz_utc)
+        local = utc.astimezone(tz_local)
+        print(local.isoformat(sep=' ', timespec=precision))
+
+def _cli():
+    '''
+    Command line argument parsing, and trigger of the main function.
+    '''
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
+    parser.add_argument(
+        'epoch',
+        type = float,
+        nargs='?',
+        help = 'Seconds since the UNIX epoch. Only allowed without the -s (--stream) flag.')
+    parser.add_argument(
+        '-z',
+        '--timezone',
+        type = str,
+        default = TIMEZONE,
+        help = f'Timezone into which the given epoch shall be converted (default: {TIMEZONE})')
+    parser.add_argument(
+        '-p',
+        '--precision',
+        type = str,
+        default = 'microseconds',
+        help = f'Precision of the output (default is microseconds, possible values are {", ".join(PRECISIONS)})')
+    parser.add_argument(
+        '-s',
+        '--stream',
+        action='store_true',
+        help = f'Stream epochs from stdin. Only allowed without the positional epoch argument.')
+    # If the user does not provide any command line arguments, print the usage
+    # to stderr, instead of throwing an error.
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+    args = parser.parse_args()
+    # Assert that either epoch or stream flag is provided by the user,
+    # otherwise print the usage to stderr, instead of throwing an error.
+    if (args.epoch and args.stream) or (not args.epoch and not args.stream):
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+    # If the precision given by the user is not available, print the usage to
+    # stderr, instead of throwing an error.
+    if args.precision not in PRECISIONS:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+    if not args.stream:
+        _datetime(args.epoch, args.timezone, args.precision)
+    else:
+        _datetime_stream(args.timezone, args.precision)
+
+if __name__ == '__main__':
+    _cli()
